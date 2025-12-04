@@ -7,24 +7,52 @@ sys.path.append(main_dirname)
 
 from contextlib import contextmanager
 import pyodbc
-import oracledb
+import datetime
+try:
+    import oracledb
+except ImportError:
+    print("Some required libraries are not installed. Installing them...")
+    try:
+        import subprocess
+
+        # Path to the target Python executable
+        python_exe = r"C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe"
+
+        # Ensure the path exists
+        if not os.path.exists(python_exe):
+            print(f"Error: Python executable not found at '{python_exe}'")
+            sys.exit(1)
+
+        # Install oracledb using pip
+        try:
+            subprocess.check_call([python_exe, "-m", "pip", "install", "oracledb"])
+            print("oracledb installed successfully.")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to install oracledb. Error: {e}")
+            sys.exit()
+        print("Required libraries installed successfully.")
+    except Exception as e:
+        print(f"Failed to install required libraries: {e}")
+        print(f"Process finish time: {datetime.datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+        sys.exit(1)
+
 import json
 import logging
 import logging.config
 import psycopg2
 from common.config import *
 from typing import Union
-GenericCursor = pyodbc.Cursor | oracledb.Cursor
+# GenericCursor = pyodbc.Cursor | oracledb.Cursor
 ORACLE_CLIENT_INITALIZED = False
-ConnectionType = Union[pyodbc.Connection, oracledb.Connection]
+# ConnectionType = Union[pyodbc.Connection, oracledb.Connection]
 
 import arcpy
 
 
-with open('logging_config.json', 'r') as file:
-    config_dict = json.load(file)
+# with open('logging_config.json', 'r') as file:
+#     config_dict = json.load(file)
 
-logging.config.dictConfig(config_dict)
+# logging.config.dictConfig(config_dict)
 logger = logging.getLogger(__name__)
 
 def connect_to_sql_server(config: DBConfig):
