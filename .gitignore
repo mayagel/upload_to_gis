@@ -1,0 +1,24 @@
+!*.gitkeep
+
+env/
+*.csv
+*.txt
+__pycache__/
+config.py
+*.lock
+*.log
+/.vscode/settings.json
+venv/
+myenv/
+*.sde
+
+
+# Large data files
+outputs/
+imports/debug_output/
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.sbn
+*.zip
