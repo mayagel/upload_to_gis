@@ -18,6 +18,8 @@ GenericCursor = pyodbc.Cursor | oracledb.Cursor
 ORACLE_CLIENT_INITALIZED = False
 ConnectionType = Union[pyodbc.Connection, oracledb.Connection]
 
+import arcpy
+
 
 with open('logging_config.json', 'r') as file:
     config_dict = json.load(file)
@@ -64,18 +66,19 @@ def connect_to_oracle(config) -> oracledb.Connection:
         logger.exception(f"Error while connecting to oracle db {e}")
         raise
     
-def connect_to_gis(config: DBConfig) -> psycopg2.extensions.connection:
+def connect_to_gis(config: DBConfig) -> arcpy.da.UpdateCursor:
+    edit = arcpy.da.Editor(postgres_SDE_path)
     try:
-        conn = psycopg2.connect(
-            host=config.host,
-            user=config.user,
-            dbname=config.db_name,
-            password=config.password,
-            port=config.port
-        )
+        arcpy.env.workspace = f"Database Connections/{DBConfig.db_name}.sde"
+        arcpy.env.overwriteOutput = True
+        edit.startEditing(with_undo=True, multiuser_mode=False)
+        edit.startOperation()
+        conn = arcpy.da.UpdateCursor(postgres_SDE_path, ['*'])
         logger.debug(f"Connected to postgresql {config.host}.{config.db_name} successfully")
         return conn
     except Exception as e:
+        edit.stopOperation()
+        edit.stopEditing(save_changes=False)
         logger.exception(f"Error while connecting to GIS db {e}")
         raise
  
