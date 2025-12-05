@@ -73,8 +73,7 @@ def map_json_to_gdb_columns(json_data):
         'legal_area', 'status', 'status_text', 'locality_id', 'locality_name',
         'reg_mun_id', 'reg_mun_name', 'county_id', 'county_name', 'region_id',
         'region_name', 'wp', 'wp_status', 'wp_status_text', 'talar_numb',
-        'talar_year', 'idkun_talar_date', 'xoid', 'gparcel', 'globalid',
-        'gdb_archive_oid', 'gdb_from_date', 'gdb_to_date'
+        'talar_year', 'idkun_talar_date', 'xoid', 'gparcel', 'globalid'
     ]
     
     # Initialize result dictionary with None values
@@ -189,10 +188,7 @@ def create_gdb_and_feature_class(output_dir, gdb_name, feature_class_name):
         ('idkun_talar_date', 'TEXT', 100, None, None, 'Idkun Talar Date', 'NULLABLE'),
         ('xoid', 'LONG', None, None, None, 'Xoid', 'NULLABLE'),
         ('gparcel', 'TEXT', 50, None, None, 'GParcel', 'NULLABLE'),
-        ('globalid', 'TEXT', 38, None, None, 'Global ID', 'NULLABLE'),
-        ('gdb_archive_oid', 'LONG', None, None, None, 'GDB Archive OID', 'NULLABLE'),
-        ('gdb_from_date', 'DATE', None, None, None, 'GDB From Date', 'NULLABLE'),
-        ('gdb_to_date', 'DATE', None, None, None, 'GDB To Date', 'NULLABLE')
+        ('globalid', 'TEXT', 38, None, None, 'Global ID', 'NULLABLE')
     ]
     
     # Create feature class
@@ -226,6 +222,85 @@ def create_gdb_and_feature_class(output_dir, gdb_name, feature_class_name):
 
 
 def upsert_blocks_and_parcels(SDE_path: Path, GDB_path: Path, field_names: list[str]):
+    """
+    Upsert records from a File Geodatabase feature class to an SDE feature class.
+    Uses batch operations for maximum performance.
+    """
+    logger.debug("start upsert_blocks_and_parcels")
+    success_count, fail_count, delete_count = 0, 0, 0
+    try:
+        gdb_path_str = str(GDB_path).replace('\\', '/')
+        sde_path_str = str(SDE_path).replace('\\', '/')
+        logger.info(f"Reading from GDB: {gdb_path_str}")
+        logger.info(f"Reading from SDE: {sde_path_str}")
+        # Read all destination records
+        with arcpy.da.SearchCursor(sde_path_str, field_names) as db_ops:
+            blocks_and_parcels_dic_destination = {}
+            for target_bp in tqdm(db_ops, desc="Reading destination"):
+                blocks_and_parcels_dic_destination[(target_bp[1], target_bp[2], target_bp[3])] = target_bp
+        logger.info(f"Read {len(blocks_and_parcels_dic_destination)} records from destination SDE")
+        # Read all source records and separate into updates vs inserts
+        updates = []
+        inserts = []
+        with arcpy.da.SearchCursor(gdb_path_str, field_names) as blocks_and_parcels_source:
+            blocks_and_parcels_dic_source = {}
+            for bp in tqdm(blocks_and_parcels_source, desc="Reading source"):
+                key = (bp[1], bp[2], bp[3])
+                blocks_and_parcels_dic_source[key] = bp
+                if key in blocks_and_parcels_dic_destination:
+                    updates.append(bp)
+                else:
+                    inserts.append(bp)
+        logger.info(f"Read {len(blocks_and_parcels_dic_source)} records from source GDB")
+        logger.info(f"Found {len(updates)} records to update, {len(inserts)} to insert")
+        # Batch insert new records
+        if inserts:
+            logger.info(f"Inserting {len(inserts)} new records...")
+            with arcpy.da.InsertCursor(sde_path_str, field_names) as cursor:
+                for bp in tqdm(inserts, desc="Inserting"):
+                    try:
+                        cursor.insertRow(bp)
+                        success_count += 1
+                    except Exception:
+                        logger.exception(
+                            f"Error inserting blocks_and_parcels with block_id={bp[1]}, parcel_id={bp[2]}, suffix_id={bp[3]}")
+                        fail_count += 1
+        # Batch update existing records
+        if updates:
+            logger.info(f"Updating {len(updates)} existing records...")
+            updates_dict = {(bp[1], bp[2], bp[3]): bp for bp in updates}
+            with arcpy.da.UpdateCursor(sde_path_str, field_names) as cursor:
+                for row in tqdm(cursor, desc="Updating", total=len(blocks_and_parcels_dic_destination)):
+                    key = (row[1], row[2], row[3])
+                    if key in updates_dict:
+                        try:
+                            cursor.updateRow(updates_dict[key])
+                            success_count += 1
+                        except Exception:
+                            logger.exception(
+                                f"Error updating blocks_and_parcels with block_id={row[1]}, parcel_id={row[2]}, suffix_id={row[3]}")
+                            fail_count += 1
+        # Delete records in destination that are not in source
+        to_delete_keys = set(blocks_and_parcels_dic_destination.keys()) - set(blocks_and_parcels_dic_source.keys())
+        logger.info(f"Deleting {len(to_delete_keys)} records not in source")
+        if to_delete_keys:
+            with arcpy.da.UpdateCursor(sde_path_str, field_names) as delete_cursor:
+                for del_row in tqdm(delete_cursor, desc="Deleting", total=len(blocks_and_parcels_dic_destination)):
+                    key = (del_row[1], del_row[2], del_row[3])
+                    if key in to_delete_keys:
+                        try:
+                            delete_cursor.deleteRow()
+                            delete_count += 1
+                        except Exception:
+                            logger.exception(f"Error deleting blocks_and_parcels with block_id={del_row[1]}, parcel_id={del_row[2]}, suffix_id={del_row[3]}")
+        logger.info(
+            f"Upsert complete: {success_count} successful, {fail_count} failed, {delete_count} deleted")
+    except Exception as e:
+        logger.exception(f"Error in upsert_blocks_and_parcels: {e}")
+        raise
+
+
+def upsert_blocks_and_parcels2(SDE_path: Path, GDB_path: Path, field_names: list[str]):
     logger.debug("start upsert_blocks_and_parcels")
     success_count, fail_count, delete_count = 0, 0, 0
     
@@ -380,9 +455,6 @@ def main(FromCC: bool, field_names: list[str], output_dir: Path, gdb_name: str, 
                             generate_xoid(),
                             mapped_data.get('gparcel'),
                             mapped_data.get('globalid'),
-                            mapped_data.get('gdb_archive_oid'),
-                            mapped_data.get('gdb_from_date'),
-                            mapped_data.get('gdb_to_date')
                         ]
                         
                         cursor.insertRow(insert_row)
@@ -405,7 +477,7 @@ def main(FromCC: bool, field_names: list[str], output_dir: Path, gdb_name: str, 
 
     # Step 5: Upload to GIS Postgres
     SDE_PATH = Path(postgres_SDE_path) / "GIS_PARCEL_backup"
-    upsert_blocks_and_parcels(SDE_PATH, Path(output_dir, gdb_name, feature_class_name), field_names)
+    upsert_blocks_and_parcels(SDE_PATH, Path(output_dir, gdb_name+".gdb", feature_class_name), field_names)
 
     logger.info("upsert to GIS postgres completed successfully.")
 
@@ -420,11 +492,10 @@ if __name__ == "__main__":
         'locality_id', 'locality_name', 'reg_mun_id', 'reg_mun_name',
         'county_id', 'county_name', 'region_id', 'region_name', 'wp',
         'wp_status', 'wp_status_text', 'talar_numb', 'talar_year',
-        'idkun_talar_date', 'xoid', 'gparcel', 'globalid',
-        'gdb_archive_oid', 'gdb_from_date', 'gdb_to_date'
+        'idkun_talar_date', 'xoid', 'gparcel', 'globalid'
     ]
     FROM_cc = False  # Set to True to fetch from central catalog
-    main(FROM_cc, field_names, output_dir, gdb_name="blocks_and_parcels", feature_class_name="blocks_and_parcels")
+    main(FROM_cc, field_names, output_dir, gdb_name="blocks_and_parcels_GDB", feature_class_name="blocks_and_parcels_FC")
 
 
 
